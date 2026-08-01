@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>DataProcess · Robot Dataset Studio</title>
+    <link rel="stylesheet" href="/styles.css?v=20260801-1" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div>
+            <div class="brand-name">DataProcess</div>
+            <div class="brand-subtitle">ROBOT DATASET STUDIO</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <div class="health"><i id="healthDot"></i><span id="healthText">连接中</span></div>
+          <button class="button button-primary" id="openExport">导出 GR00T 数据集</button>
+        </div>
+      </header>
+
+      <aside class="sidebar">
+        <section class="source-panel">
+          <label for="rawRoot">原始数据目录</label>
+          <div class="source-row">
+            <input id="rawRoot" spellcheck="false" value="/mnt/pangyunyi/figure/raw/20260730" />
+            <button class="icon-button" id="scanButton" title="重新扫描" aria-label="重新扫描">
+              <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
+            </button>
+          </div>
+        </section>
+
+        <section class="summary-grid" aria-label="数据统计">
+          <div><strong id="countTotal">—</strong><span>全部</span></div>
+          <div><strong id="countUnprocessed">—</strong><span>未处理</span></div>
+          <div><strong id="countPending">—</strong><span>待导出</span></div>
+          <div><strong id="countExported">—</strong><span>已导出</span></div>
+          <div><strong id="countFailed">—</strong><span>采集失败</span></div>
+        </section>
+
+        <div class="preload-status" id="preloadStatus" data-state="idle">
+          <span class="preload-pulse"></span>
+          <span id="preloadText">选择 episode 后预加载后续 5 个</span>
+        </div>
+
+        <div class="list-tools">
+          <div class="segmented" id="statusFilter">
+            <button class="active" data-filter="all">全部</button>
+            <button data-filter="unprocessed">未处理</button>
+            <button data-filter="processed">待导出</button>
+            <button data-filter="exported">已导出</button>
+            <button data-filter="failed">失败</button>
+          </div>
+          <div class="search-box">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
+            <input id="searchInput" placeholder="搜索 episode" />
+          </div>
+        </div>
+
+        <div class="episode-list" id="episodeList">
+          <div class="list-empty">正在读取 episode…</div>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <div class="empty-workspace" id="emptyWorkspace">
+          <div class="empty-orbit"><span></span><span></span><span></span></div>
+          <h1>选择一个 episode 开始审阅</h1>
+          <p>同步查看三路相机、状态与动作曲线，然后设置有效数据区间。</p>
+        </div>
+
+        <div class="review-workspace hidden" id="reviewWorkspace">
+          <div class="episode-header">
+            <div>
+              <div class="eyebrow">EPISODE REVIEW</div>
+              <div class="episode-title-row">
+                <h1 id="episodeTitle">episode_000000</h1>
+                <span class="status-badge" id="episodeStatus">正常</span>
+              </div>
+              <p id="episodeSummary">—</p>
+            </div>
+            <div class="episode-actions">
+              <button class="button button-ghost" id="autoTrim">自动裁剪</button>
+              <button class="button button-danger" id="toggleExclude">标记为失败</button>
+              <button class="button button-primary" id="saveReview">保存审阅</button>
+            </div>
+          </div>
+
+          <section class="video-grid" id="videoGrid">
+            <article class="video-card video-card-wide" data-camera="head">
+              <div class="video-label"><span>HEAD</span><small>主视角 · ego_view</small></div>
+              <div class="video-state" data-state="loading">加载中</div>
+              <video id="videoHead" muted playsinline preload="metadata"></video>
+              <div class="video-loading"><span></span>首次打开正在生成预览</div>
+            </article>
+            <article class="video-card" data-camera="left_wrist">
+              <div class="video-label"><span>LEFT WRIST</span><small>左腕</small></div>
+              <div class="video-state" data-state="loading">加载中</div>
+              <video id="videoLeft" muted playsinline preload="metadata"></video>
+              <div class="video-loading"><span></span>生成预览中</div>
+            </article>
+            <article class="video-card" data-camera="right_wrist">
+              <div class="video-label"><span>RIGHT WRIST</span><small>右腕</small></div>
+              <div class="video-state" data-state="loading">加载中</div>
+              <video id="videoRight" muted playsinline preload="metadata"></video>
+              <div class="video-loading"><span></span>生成预览中</div>
+            </article>
+          </section>
+
+          <section class="playback-panel">
+            <div class="playback-controls">
+              <button class="round-button" id="stepBack" title="上一帧">
+                <svg viewBox="0 0 24 24"><path d="M6 5v14M18 6l-9 6 9 6z" /></svg>
+              </button>
+              <button class="play-button" id="playPause" title="播放/暂停">
+                <svg class="play-icon" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z" /></svg>
+                <svg class="pause-icon" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" /></svg>
+              </button>
+              <button class="round-button" id="stepForward" title="下一帧">
+                <svg viewBox="0 0 24 24"><path d="M18 5v14M6 6l9 6-9 6z" /></svg>
+              </button>
+              <div class="timecode"><strong id="currentTime">00:00.000</strong><span>/</span><span id="totalTime">00:00.000</span></div>
+              <div class="speed-control">
+                <label for="playbackSpeed">速度</label>
+                <select id="playbackSpeed">
+                  <option value="0.25">0.25×</option>
+                  <option value="0.5">0.5×</option>
+                  <option value="1" selected>1×</option>
+                  <option value="1.5">1.5×</option>
+                  <option value="2">2×</option>
+                </select>
+              </div>
+            </div>
+            <input class="seek-bar" id="seekBar" type="range" min="0" max="1" step="0.01" value="0" aria-label="回放时间" />
+          </section>
+
+          <section class="analysis-grid">
+            <article class="panel timeline-panel">
+              <div class="panel-heading">
+                <div><span class="panel-kicker">VALID WINDOW</span><h2>有效区间</h2></div>
+                <div class="retained"><span id="retainedPercent">100%</span> 保留</div>
+              </div>
+              <div class="trim-timeline" id="trimTimeline">
+                <div class="trim-track"><div class="trim-valid" id="trimValid"></div></div>
+                <input id="trimStart" type="range" min="0" max="1" step="0.01" value="0" />
+                <input id="trimEnd" type="range" min="0" max="1" step="0.01" value="1" />
+              </div>
+              <div class="trim-values">
+                <label><span>起点</span><input id="trimStartNumber" type="number" step="0.05" min="0" value="0" /><small>s</small></label>
+                <div class="trim-duration"><span>有效时长</span><strong id="trimDuration">—</strong></div>
+                <label><span>终点</span><input id="trimEndNumber" type="number" step="0.05" min="0" value="0" /><small>s</small></label>
+              </div>
+            </article>
+
+            <article class="panel data-panel">
+              <div class="panel-heading">
+                <div><span class="panel-kicker">STATE / ACTION</span><h2>关节轨迹</h2></div>
+                <select id="jointSelect" aria-label="选择关节"></select>
+              </div>
+              <div class="chart-wrap"><canvas id="seriesChart"></canvas><div class="chart-legend"><span class="legend-state">状态</span><span class="legend-action">动作</span></div></div>
+            </article>
+          </section>
+
+          <section class="panel metadata-panel">
+            <div class="metadata-cell"><span>状态帧</span><strong id="metaStateFrames">—</strong></div>
+            <div class="metadata-cell"><span>动作帧</span><strong id="metaActionFrames">—</strong></div>
+            <div class="metadata-cell"><span>状态维度</span><strong id="metaDimensions">—</strong></div>
+            <div class="metadata-cell"><span>Manifest ID</span><strong id="metaManifest">—</strong></div>
+            <label class="note-field"><span>审阅备注</span><input id="reviewNote" placeholder="可选：记录异常、裁剪原因…" /></label>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <dialog id="exportDialog">
+      <form method="dialog" class="dialog-card" id="exportForm">
+        <div class="dialog-header">
+          <div><span class="panel-kicker">EXPORT DATASET</span><h2>导出 GR00T · LeRobot v2.1</h2></div>
+          <button class="dialog-close" value="cancel" aria-label="关闭">×</button>
+        </div>
+        <p class="dialog-intro">仅导出已保存审阅、未标记失败且从未导出过的 episode。导出成功后自动登记，后续批次不会重复包含。</p>
+        <div class="form-grid">
+          <label class="form-field form-field-wide"><span>输出目录</span><input id="outputRoot" value="/mnt/pangyunyi/figure/outputs/20260730-G1-robot01" required /></label>
+          <label class="form-field form-field-wide"><span>任务描述 / Language instruction</span><input id="taskText" placeholder="例如：pick up the object and place it in the box" required /></label>
+          <label class="form-field"><span>采样频率</span><select id="exportFps"><option value="20" selected>20 Hz</option><option value="10">10 Hz</option><option value="30">30 Hz</option></select></label>
+          <label class="form-field"><span>目录布局</span><select id="exportLayout"><option value="chunked" selected>GR00T 官方 chunk-000</option><option value="flat">平铺兼容（train-00000）</option></select></label>
+        </div>
+        <fieldset class="camera-options">
+          <legend>视频机位</legend>
+          <label><input type="checkbox" name="camera" value="head" checked /><span>Head / ego_view</span></label>
+          <label><input type="checkbox" name="camera" value="left_wrist" checked /><span>Left wrist</span></label>
+          <label><input type="checkbox" name="camera" value="right_wrist" checked /><span>Right wrist</span></label>
+        </fieldset>
+        <label class="overwrite-option"><input type="checkbox" id="overwriteOutput" /><span>输出已存在时，将旧目录重命名为带时间戳的备份</span></label>
+        <div class="export-summary"><div><strong id="exportEpisodes">0</strong><span>EPISODES</span></div><div><strong id="exportSeconds">0</strong><span>SECONDS</span></div><div><strong>38</strong><span>STATE / ACTION DIM</span></div></div>
+        <div class="job-progress hidden" id="jobProgress">
+          <div class="job-progress-head"><span id="jobMessage">准备中</span><strong id="jobPercent">0%</strong></div>
+          <div class="progress-track"><div id="jobProgressBar"></div></div>
+          <pre id="jobError"></pre>
+        </div>
+        <div class="dialog-footer">
+          <button class="button button-ghost" value="cancel">取消</button>
+          <button class="button button-primary" type="button" id="startExport">开始转换</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+    <script src="/app.js?v=20260801-3" defer></script>
+  </body>
+</html>

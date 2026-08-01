@@ -1,0 +1,36 @@
+# Python bytecode and local environments
+__pycache__/
+*.py[cod]
+.venv/
+.deps/
+.pytest_cache/
+.mypy_cache/
+
+# DataProcess runtime state (kept only on the 4090/NFS)
+runtime/
+outputs/
+data/
+videos/
+meta/
+
+# Robot datasets and generated media
+*.raw
+*.mp4
+*.parquet
+*.jsonl
+*.jpg
+*.jpeg
+
+# Local configuration, logs, and archives
+.env
+.env.*
+!.env.example
+*.log
+*.sqlite3
+*.tgz
+*.tar.gz
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
