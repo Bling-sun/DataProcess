@@ -6,6 +6,15 @@ PYTHON_BIN="${PROJECT_DIR}/.venv/bin/python"
 DEPS_DIR="${PROJECT_DIR}/.deps"
 PROJECT_TMP_DIR="${DATAPROCESS_TMP_DIR:-${PROJECT_DIR}/runtime/tmp}"
 
+if [[ -f "${PROJECT_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${PROJECT_DIR}/.env"
+  set +a
+fi
+
+export PATH="${PROJECT_DIR}/.venv/bin:${DEPS_DIR}/bin:${PATH}"
+
 mkdir -p "${PROJECT_TMP_DIR}"
 export TMPDIR="${PROJECT_TMP_DIR}"
 export TMP="${PROJECT_TMP_DIR}"

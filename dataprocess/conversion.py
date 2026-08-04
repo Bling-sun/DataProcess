@@ -3,6 +3,7 @@ from __future__ import annotations
 import bisect
 import datetime as dt
 import json
+import hashlib
 import math
 import os
 import shutil
@@ -57,6 +58,28 @@ def _import_pyarrow():
     return pa, pq
 
 
+def convert_dataset(
+    progress: Progress,
+    raw_root: str,
+    runtime_root: str,
+    options: dict[str, Any],
+) -> dict[str, Any]:
+    """Subprocess entry point for conversion and native dependency loading."""
+    dataset = RawDataset(Path(raw_root), Path(runtime_root))
+    return Converter(dataset).convert(options, progress)
+
+
+def _is_trash_path(path: Path) -> bool:
+    home_trash = (Path.home() / ".local" / "share" / "Trash").resolve()
+    if path == home_trash or home_trash in path.parents:
+        return True
+    return any(
+        parent.name == "files" and parent.parent.name.startswith(".Trash")
+        for parent in (path, *path.parents)
+        if parent.parent != parent
+    )
+
+
 class Converter:
     def __init__(self, dataset: RawDataset):
         self.dataset = dataset
@@ -66,6 +89,8 @@ class Converter:
         output = Path(str(options.get("output_root", ""))).expanduser().resolve()
         if not output.is_absolute() or str(output) == "/":
             raise DataProcessError("输出目录必须是安全的绝对路径")
+        if _is_trash_path(output):
+            raise DataProcessError("输出目录不能位于系统回收站，请选择正常的数据目录")
         if output == self.dataset.root:
             raise DataProcessError("输出目录不能覆盖 raw 数据目录")
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -100,11 +125,62 @@ class Converter:
                 inspection.ready
                 and processed
                 and not review.get("excluded", False)
-                and not exported
             ):
                 selected.append((str(episode_id), inspection, review))
         if not selected:
-            raise DataProcessError("没有已处理、未标记失败且未经导出的 episode")
+            raise DataProcessError("没有已处理且未标记失败的 episode")
+
+        existing_conversion: dict[str, Any] | None = None
+        existing_episode_meta: list[dict[str, Any]] = []
+        managed_existing = False
+        if output.exists():
+            try:
+                existing_conversion = read_json(output / "meta" / "conversion.json")
+                with (output / "meta" / "episodes.jsonl").open("r", encoding="utf-8") as stream:
+                    existing_episode_meta = [json.loads(line) for line in stream if line.strip()]
+                managed_existing = (
+                    existing_conversion.get("source") == str(self.dataset.root)
+                    and existing_conversion.get("layout") == layout
+                )
+            except (DataProcessError, OSError, json.JSONDecodeError):
+                managed_existing = False
+            if managed_existing:
+                old_order = {
+                    str(item.get("raw_episode_id")): int(item.get("episode_index", index))
+                    for index, item in enumerate(existing_episode_meta)
+                }
+                selected.sort(
+                    key=lambda item: (
+                        0 if item[0] in old_order else 1,
+                        old_order.get(item[0], 0),
+                        item[0],
+                    )
+                )
+
+        existing_empty = output.is_dir() and not any(output.iterdir())
+        if (
+            output.exists()
+            and not managed_existing
+            and not existing_empty
+            and not bool(options.get("overwrite", False))
+        ):
+            raise DataProcessError(f"输出目录已存在且不是当前数据集的历史输出: {output}")
+        dataset_signature = self._dataset_signature(selected, task, fps, layout, cameras)
+        if (
+            managed_existing
+            and existing_conversion is not None
+            and existing_conversion.get("dataset_signature") == dataset_signature
+        ):
+            progress(1.0, "输出已是最新版本，无需重复转换")
+            return {
+                "output_root": str(output),
+                "backup_root": None,
+                "episodes": len(existing_episode_meta),
+                "frames": int(existing_conversion.get("frame_count", 0)),
+                "videos": len(existing_episode_meta) * len(cameras),
+                "layout": layout,
+                "skipped_unchanged": True,
+            }
 
         building = output.parent / f".{output.name}.building-{uuid.uuid4().hex[:8]}"
         building.mkdir(parents=False, exist_ok=False)
@@ -245,6 +321,7 @@ class Converter:
                     "episode_count": len(selected),
                     "frame_count": global_index,
                     "camera_names": cameras,
+                    "dataset_signature": dataset_signature,
                     "source_episode_ids": [source_id for source_id, _, _ in selected],
                 },
             )
@@ -253,14 +330,22 @@ class Converter:
 
             backup: Path | None = None
             if output.exists():
-                if not bool(options.get("overwrite", False)):
-                    raise DataProcessError(f"输出目录已存在: {output}")
-                stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-                backup = output.parent / f"{output.name}.backup-{stamp}"
-                if backup.exists():
-                    backup = output.parent / f"{output.name}.backup-{stamp}-{uuid.uuid4().hex[:4]}"
-                output.rename(backup)
+                if output.is_dir() and not any(output.iterdir()):
+                    output.rmdir()
+                else:
+                    if not managed_existing and not bool(options.get("overwrite", False)):
+                        raise DataProcessError(
+                            f"输出目录已存在且不是当前数据集的历史输出: {output}"
+                        )
+                    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+                    backup = output.parent / f"{output.name}.backup-{stamp}"
+                    if backup.exists():
+                        backup = output.parent / f"{output.name}.backup-{stamp}-{uuid.uuid4().hex[:4]}"
+                    output.rename(backup)
             building.rename(output)
+            if backup is not None and managed_existing and not bool(options.get("overwrite", False)):
+                shutil.rmtree(backup)
+                backup = None
             self.dataset.mark_exported(
                 [(source_id, index) for index, (source_id, _, _) in enumerate(selected)],
                 output,
@@ -278,6 +363,50 @@ class Converter:
             if building.exists():
                 shutil.rmtree(building)
             raise
+
+    def _dataset_signature(
+        self,
+        selected: list[tuple[str, Any, dict[str, Any]]],
+        task: str,
+        fps: float,
+        layout: str,
+        cameras: list[str],
+    ) -> str:
+        episodes: list[dict[str, Any]] = []
+        for source_id, inspection, review in selected:
+            files = [
+                inspection.path / "manifest.json",
+                inspection.path / "observation_state_frame.jsonl",
+                inspection.path / "applied_action_frame.jsonl",
+            ]
+            for camera in cameras:
+                files.extend([
+                    inspection.path / camera / "rgb.raw",
+                    inspection.path / camera / "frames.jsonl",
+                ])
+            source_signature = []
+            for path in files:
+                stat = path.stat()
+                source_signature.append([
+                    str(path.relative_to(inspection.path)), stat.st_size, stat.st_mtime_ns
+                ])
+            episodes.append({
+                "source_id": source_id,
+                "trim_start_s": round(float(review.get("trim_start_s", 0.0)), 4),
+                "trim_end_s": round(float(review.get("trim_end_s", inspection.duration_s)), 4),
+                "source_signature": source_signature,
+            })
+        payload = {
+            "source": str(self.dataset.root),
+            "task": task,
+            "fps": fps,
+            "layout": layout,
+            "cameras": cameras,
+            "episodes": episodes,
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
 
     def _encode_video(
         self,

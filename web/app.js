@@ -31,9 +31,55 @@ const mediaCache = new Map();
 const PRELOAD_AHEAD = 5;
 const KEEP_BEHIND = 2;
 const STORAGE_VERSION = 1;
+const PREFERENCES_KEY = "dataprocess:preferences:v1";
+const DEFAULT_TASK = "Hold the shipping label face up with both hands and push it onto the conveyor belt.";
 
 function storageKey(kind, rawRoot = rootValue()) {
   return `dataprocess:${kind}:v${STORAGE_VERSION}:${rawRoot}`;
+}
+
+function loadPreferences() {
+  try {
+    const preferences = JSON.parse(localStorage.getItem(PREFERENCES_KEY) || "null") || {};
+    if (preferences.rawRoot) $("#rawRoot").value = preferences.rawRoot;
+    if (preferences.outputRoot) $("#outputRoot").value = preferences.outputRoot;
+    if (preferences.task) $("#taskText").value = preferences.task;
+    app.taskHistory = Array.isArray(preferences.taskHistory)
+      ? preferences.taskHistory.filter(Boolean).slice(0, 20)
+      : [];
+  } catch (error) {
+    console.warn("Unable to restore preferences", error);
+    app.taskHistory = [];
+  }
+  if (!app.taskHistory.includes(DEFAULT_TASK)) app.taskHistory.push(DEFAULT_TASK);
+  renderTaskHistory();
+}
+
+function renderTaskHistory() {
+  const list = $("#taskHistory");
+  list.replaceChildren(...(app.taskHistory || []).map((task) => {
+    const option = document.createElement("option");
+    option.value = task;
+    return option;
+  }));
+}
+
+function savePreferences(rememberCurrentTask = false) {
+  const task = $("#taskText").value.trim();
+  if (rememberCurrentTask && task) {
+    app.taskHistory = [task, ...(app.taskHistory || []).filter((value) => value !== task)].slice(0, 20);
+    renderTaskHistory();
+  }
+  try {
+    localStorage.setItem(PREFERENCES_KEY, JSON.stringify({
+      rawRoot: rootValue(),
+      outputRoot: $("#outputRoot").value.trim(),
+      task: task || DEFAULT_TASK,
+      taskHistory: app.taskHistory || [DEFAULT_TASK],
+    }));
+  } catch (error) {
+    console.warn("Unable to persist preferences", error);
+  }
 }
 
 function mediaKey(episodeId, camera, rawRoot = rootValue(), cacheVersion = "0") {
@@ -114,11 +160,17 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function toast(message, kind = "normal", duration = 3200) {
+function toast(message, kind = "normal", duration = 3200, placement = "global") {
   const node = document.createElement("div");
   node.className = `toast ${kind === "error" ? "error" : ""}`;
   node.textContent = message;
-  $("#toastStack").appendChild(node);
+  if (placement === "main-view") {
+    node.classList.add("main-view-toast");
+    const mainView = document.querySelector(".video-card[data-camera=\"head\"]");
+    (mainView || $("#toastStack")).appendChild(node);
+  } else {
+    $("#toastStack").appendChild(node);
+  }
   window.setTimeout(() => node.remove(), duration);
 }
 
@@ -149,6 +201,7 @@ async function loadHealth() {
 }
 
 async function scan(refresh = false, selectCurrent = true) {
+  savePreferences();
   const button = $("#scanButton");
   button.classList.add("loading");
   button.disabled = true;
@@ -323,6 +376,8 @@ function renderDetail() {
   $("#toggleExclude").disabled = !detail.ready;
   $("#autoTrim").disabled = !detail.ready;
   $("#saveReview").disabled = !detail.ready;
+  $("#setTrimStartNow").disabled = !detail.ready;
+  $("#setTrimEndNow").disabled = !detail.ready;
 
   const duration = Math.max(0, detail.duration_s || 0);
   for (const id of ["#seekBar", "#trimStart", "#trimEnd"]) $(id).max = duration;
@@ -742,6 +797,24 @@ function setTrim(which, value, seekToValue = true) {
   if (seekToValue) seek(which === "start" ? start : end);
 }
 
+function setTrimFromCurrentFrame(which) {
+  if (!app.detail?.ready) return;
+  pausePlayback();
+  const current = Math.round(app.currentTime * 1000) / 1000;
+  const duration = app.detail.duration_s;
+  const { start, end } = trimValues();
+  if (which === "start" && current > end - 0.25) {
+    setTrim("end", Math.min(duration, current + 0.25), false);
+  } else if (which === "end" && current < start + 0.25) {
+    setTrim("start", Math.max(0, current - 0.25), false);
+  }
+  setTrim(which, current, false);
+  const applied = Number(which === "start" ? $("#trimStart").value : $("#trimEnd").value);
+  seek(applied);
+  const label = which === "start" ? "起点" : "终点";
+  toast(`${label}已锚定到当前帧 ${formatTime(applied)}`);
+}
+
 function updateTrimUI() {
   if (!app.detail) return;
   const duration = Math.max(app.detail.duration_s, 0.001);
@@ -774,7 +847,7 @@ async function saveReview() {
     renderDetail();
     renderEpisodeList();
     renderSummaryFromEpisodes();
-    toast("审阅结果已保存");
+    toast("审阅结果已保存", "normal", 2200, "main-view");
   } catch (error) {
     toast(error.message, "error");
   }
@@ -837,7 +910,7 @@ function renderSummaryFromEpisodes() {
   app.counts.total = app.episodes.length;
   app.counts.unprocessed = app.episodes.filter((episode) => episode.workflow_status === "unprocessed").length;
   app.counts.processed = app.episodes.filter((episode) => episode.workflow_status === "processed").length;
-  app.counts.pending_export = app.episodes.filter((episode) => episode.export_eligible).length;
+  app.counts.pending_export = app.episodes.filter((episode) => episode.ready && episode.processed && !episode.excluded).length;
   app.counts.exported = app.episodes.filter((episode) => episode.workflow_status === "exported").length;
   app.counts.failed = app.episodes.filter((episode) => episode.workflow_status === "failed").length;
   app.counts.exportable = app.counts.pending_export;
@@ -936,7 +1009,7 @@ function drawChart() {
 }
 
 function updateExportSummary() {
-  const selected = app.episodes.filter((episode) => episode.export_eligible);
+  const selected = app.episodes.filter((episode) => episode.ready && episode.processed && !episode.excluded);
   const seconds = selected.reduce(
     (sum, episode) => sum + Math.max(0, (episode.trim_end_s ?? episode.duration_s) - (episode.trim_start_s || 0)),
     0,
@@ -946,6 +1019,7 @@ function updateExportSummary() {
 }
 
 function openExportDialog() {
+  loadPreferences();
   updateExportSummary();
   $("#jobProgress").classList.add("hidden");
   $("#jobError").textContent = "";
@@ -960,9 +1034,10 @@ async function startExport() {
   if (!task || !output) return toast("请填写输出目录和任务描述", "error");
   if (!cameras.length) return toast("请至少选择一个相机", "error");
   const episodeIds = app.episodes
-    .filter((episode) => episode.export_eligible)
+    .filter((episode) => episode.ready && episode.processed && !episode.excluded)
     .map((episode) => episode.id);
   if (!episodeIds.length) return toast("没有可导出的 episode", "error");
+  savePreferences(true);
   $("#startExport").disabled = true;
   $("#jobProgress").classList.remove("hidden");
   $("#jobError").textContent = "";
@@ -1020,6 +1095,9 @@ async function pollJob(jobId) {
 
 function bindEvents() {
   $("#scanButton").addEventListener("click", () => scan(true));
+  $("#rawRoot").addEventListener("change", () => savePreferences());
+  $("#outputRoot").addEventListener("change", () => savePreferences());
+  $("#taskText").addEventListener("change", () => savePreferences());
   $("#rawRoot").addEventListener("keydown", (event) => {
     if (event.key === "Enter") scan(true);
   });
@@ -1046,6 +1124,8 @@ function bindEvents() {
   $("#trimEnd").addEventListener("input", (event) => setTrim("end", event.target.value));
   $("#trimStartNumber").addEventListener("change", (event) => setTrim("start", event.target.value));
   $("#trimEndNumber").addEventListener("change", (event) => setTrim("end", event.target.value));
+  $("#setTrimStartNow").addEventListener("click", () => setTrimFromCurrentFrame("start"));
+  $("#setTrimEndNow").addEventListener("click", () => setTrimFromCurrentFrame("end"));
   $("#saveReview").addEventListener("click", saveReview);
   $("#toggleExclude").addEventListener("click", toggleExclude);
   $("#autoTrim").addEventListener("click", autoTrim);
@@ -1071,6 +1151,7 @@ function bindEvents() {
 }
 
 async function init() {
+  loadPreferences();
   bindEvents();
   const restored = restoreEpisodeSnapshot();
   await loadHealth();

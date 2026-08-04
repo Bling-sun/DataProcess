@@ -16,11 +16,16 @@ export PIP_CACHE_DIR="${PROJECT_PIP_CACHE_DIR}"
 if python3 -m venv "${ENV_DIR}" 2>/dev/null && "${ENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
   "${ENV_DIR}/bin/python" -m pip install --upgrade pip
   "${ENV_DIR}/bin/python" -m pip install -r "${PROJECT_DIR}/requirements.txt"
+  ffmpeg_exe="$("${ENV_DIR}/bin/python" -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+  ln -sf "${ffmpeg_exe}" "${ENV_DIR}/bin/ffmpeg"
   echo "Virtual environment ready: ${ENV_DIR}"
 else
   echo "python3-venv is unavailable; installing isolated packages into ${DEPS_DIR}."
   mkdir -p "${DEPS_DIR}"
   python3 -m pip install --upgrade --target "${DEPS_DIR}" -r "${PROJECT_DIR}/requirements.txt"
+  mkdir -p "${DEPS_DIR}/bin"
+  ffmpeg_exe="$(PYTHONPATH="${DEPS_DIR}" python3 -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+  ln -sf "${ffmpeg_exe}" "${DEPS_DIR}/bin/ffmpeg"
   echo "Project-local dependencies ready: ${DEPS_DIR}"
 fi
 

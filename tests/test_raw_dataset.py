@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from dataprocess.conversion import Converter
 from dataprocess.raw_dataset import (
     CAMERAS,
     DataProcessError,
@@ -149,6 +150,16 @@ class RawDatasetTest(unittest.TestCase):
         with self.assertRaises(DataProcessError):
             dataset.detail("../episode_000000")
 
+    def test_conversion_rejects_trash_output(self) -> None:
+        self.make_episode()
+        dataset = RawDataset(self.raw, self.runtime)
+        trash_output = Path.home() / ".local" / "share" / "Trash" / "files" / "dataset"
+        with self.assertRaisesRegex(DataProcessError, "回收站"):
+            Converter(dataset).convert(
+                {"output_root": str(trash_output)},
+                lambda _value, _message: None,
+            )
+
     def test_preview_sampling_matches_20_hz_timeline(self) -> None:
         indices, fps = preview_sampling_plan(854, 29.9917)
         self.assertEqual(indices[0], 0)
@@ -182,6 +193,56 @@ class RawDatasetTest(unittest.TestCase):
         RawDataset._encode_sampled_preview(command, source, frame_size, indices)
         self.assertTrue(output.is_file())
         self.assertGreater(output.stat().st_size, 1024)
+
+
+    def test_conversion_sync_skips_unchanged_appends_and_replaces(self) -> None:
+        self.make_episode("episode_000000")
+        dataset = RawDataset(self.raw, self.runtime)
+        dataset.save_review(
+            "episode_000000",
+            {"excluded": False, "trim_start_s": 0.0, "trim_end_s": 0.9},
+        )
+        output = Path(self.temp.name) / "output"
+        output.mkdir()
+        options = {
+            "output_root": str(output),
+            "task": "sort parcel",
+            "fps": 20,
+            "layout": "chunked",
+            "cameras": ["head"],
+            "episode_ids": ["episode_000000"],
+        }
+        first = Converter(dataset).convert(options, lambda _value, _message: None)
+        self.assertFalse(first.get("skipped_unchanged", False))
+        second = Converter(dataset).convert(options, lambda _value, _message: None)
+        self.assertTrue(second["skipped_unchanged"])
+
+        self.make_episode("episode_000001")
+        dataset.save_review(
+            "episode_000001",
+            {"excluded": False, "trim_start_s": 0.0, "trim_end_s": 0.9},
+        )
+        options["episode_ids"] = ["episode_000000", "episode_000001"]
+        appended = Converter(dataset).convert(options, lambda _value, _message: None)
+        self.assertEqual(appended["episodes"], 2)
+        with (output / "meta" / "episodes.jsonl").open(encoding="utf-8") as stream:
+            metadata = [json.loads(line) for line in stream]
+        self.assertEqual(
+            [item["raw_episode_id"] for item in metadata],
+            ["episode_000000", "episode_000001"],
+        )
+
+        dataset.save_review(
+            "episode_000000",
+            {"excluded": False, "trim_start_s": 0.1, "trim_end_s": 0.8},
+        )
+        replaced = Converter(dataset).convert(options, lambda _value, _message: None)
+        self.assertFalse(replaced.get("skipped_unchanged", False))
+        with (output / "meta" / "episodes.jsonl").open(encoding="utf-8") as stream:
+            metadata = [json.loads(line) for line in stream]
+        self.assertEqual(metadata[0]["episode_index"], 0)
+        self.assertEqual(metadata[0]["trim_start_s"], 0.1)
+        self.assertEqual(metadata[1]["episode_index"], 1)
 
 
 if __name__ == "__main__":

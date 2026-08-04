@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from dataprocess import __version__
-from dataprocess.conversion import Converter
+from dataprocess.conversion import convert_dataset
 from dataprocess.jobs import JobManager
 from dataprocess.raw_dataset import DataProcessError, RawDataset
 
@@ -142,10 +142,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/jobs/convert":
             dataset = self.application.dataset(body.get("raw_root"))
-            converter = Converter(dataset)
             options = dict(body)
-            job = self.application.jobs.create(
-                "conversion", lambda progress: converter.convert(options, progress)
+            job = self.application.jobs.create_process(
+                "conversion",
+                convert_dataset,
+                str(dataset.root),
+                str(self.application.runtime_root),
+                options,
             )
             self._json(job.as_dict(), HTTPStatus.ACCEPTED)
             return

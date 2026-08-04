@@ -638,7 +638,7 @@ class RawDataset:
         episode_mapping: list[tuple[str, int]],
         output_root: Path,
     ) -> None:
-        """Persist successful export history so episodes cannot be exported twice."""
+        """Persist the latest output mapping for each successfully synchronized episode."""
         exported_at = dt.datetime.now(dt.timezone.utc).isoformat()
         reviews = self.review_store.load(self.root)
         patches: dict[str, dict[str, Any]] = {}
@@ -648,15 +648,18 @@ class RawDataset:
             if not isinstance(exports, list):
                 exports = []
             output_text = str(output_root.resolve())
-            if not any(item.get("output_root") == output_text for item in exports if isinstance(item, dict)):
-                exports = [
-                    *exports,
-                    {
-                        "output_root": output_text,
-                        "output_episode_index": output_episode_index,
-                        "exported_at": exported_at,
-                    },
-                ]
+            exports = [
+                item
+                for item in exports
+                if not isinstance(item, dict) or item.get("output_root") != output_text
+            ]
+            exports.append(
+                {
+                    "output_root": output_text,
+                    "output_episode_index": output_episode_index,
+                    "exported_at": exported_at,
+                }
+            )
             patches[source_id] = {
                 "processed": True,
                 "exports": exports,
@@ -846,7 +849,7 @@ class RawDataset:
                 self._encode_sampled_preview(
                     nvenc, source, frame_size, frame_indices
                 )
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, OSError):
                 self._encode_sampled_preview(
                     cpu, source, frame_size, frame_indices
                 )
