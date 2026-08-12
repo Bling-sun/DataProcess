@@ -54,7 +54,7 @@ STATE_GROUPS = (
     ("left_hand", 14, 26),
     ("right_hand", 26, 38),
 )
-_GPU_LOCAL = threading.local()
+_VIDEO_WORKER_LOCAL = threading.local()
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,7 +64,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime", type=Path, default=PROJECT_ROOT / "runtime")
     parser.add_argument("--fps", type=float, default=20.0)
     parser.add_argument("--task", default=DEFAULT_TASK)
+    parser.add_argument("--robot-type", default="tianji_dual_arm_xhand")
     parser.add_argument("--gpus", default="0,1,2,3,4,5,6,7")
+    parser.add_argument(
+        "--video-encoder",
+        choices=("h264_nvenc", "libx264"),
+        default="h264_nvenc",
+    )
+    parser.add_argument(
+        "--video-workers",
+        type=int,
+        default=0,
+        help="Video worker count for libx264 (default: up to 8 CPU workers).",
+    )
     parser.add_argument("--video-quality", type=int, default=20)
     parser.add_argument("--parquet-workers", type=int, default=8)
     parser.add_argument(
@@ -355,11 +367,18 @@ def video_is_valid(path: Path, expected_frames: int, count_frames: bool = False)
         return False
 
 
-def initialize_gpu_worker(gpu_queue: queue.Queue[int]) -> None:
-    _GPU_LOCAL.index = gpu_queue.get_nowait()
+def initialize_video_worker(worker_queue: queue.Queue[int]) -> None:
+    _VIDEO_WORKER_LOCAL.index = worker_queue.get_nowait()
 
 
-def build_video(spec: dict[str, Any], camera: str, root: Path, fps: float, quality: int) -> dict[str, Any]:
+def build_video(
+    spec: dict[str, Any],
+    camera: str,
+    root: Path,
+    fps: float,
+    quality: int,
+    encoder: str,
+) -> dict[str, Any]:
     episode_index = int(spec["episode_index"])
     frame_count = int(spec["frame_count"])
     source_id = str(spec["source_id"])
@@ -378,7 +397,7 @@ def build_video(spec: dict[str, Any], camera: str, root: Path, fps: float, quali
     # Extend the last decoded frame indefinitely and let -frames:v enforce the
     # exact episode length. A fixed padding window can silently yield a short MP4.
     filters.extend([f"fps={fps:.8f}", "tpad=stop_mode=clone:stop=-1"])
-    gpu = int(_GPU_LOCAL.index)
+    worker = int(_VIDEO_WORKER_LOCAL.index)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(".mp4.tmp")
     command = [
@@ -405,42 +424,39 @@ def build_video(spec: dict[str, Any], camera: str, root: Path, fps: float, quali
         str(frame_count),
         "-an",
         "-c:v",
-        "h264_nvenc",
-        "-gpu",
-        str(gpu),
-        "-preset",
-        "p4",
-        "-tune",
-        "hq",
-        "-rc",
-        "vbr",
-        "-cq",
-        str(quality),
-        "-b:v",
-        "0",
-        "-pix_fmt",
-        "yuv420p",
-        "-g",
-        str(max(1, round(fps * 2))),
-        "-movflags",
-        "+faststart",
-        "-f",
-        "mp4",
-        str(temporary),
+        encoder,
     ]
+    if encoder == "h264_nvenc":
+        command.extend(
+            [
+                "-gpu", str(worker), "-preset", "p4", "-tune", "hq",
+                "-rc", "vbr", "-cq", str(quality), "-b:v", "0",
+            ]
+        )
+    else:
+        command.extend(["-preset", "veryfast", "-crf", str(quality)])
+    command.extend(
+        [
+            "-pix_fmt", "yuv420p", "-g", str(max(1, round(fps * 2))),
+            "-movflags", "+faststart", "-f", "mp4", str(temporary),
+        ]
+    )
     started = time.monotonic()
     try:
         run_checked(command)
     except subprocess.CalledProcessError as error:
         detail = (error.stderr or "")[-4000:]
-        raise RuntimeError(f"{source_id}/{camera} failed on GPU {gpu}: {detail}") from error
+        raise RuntimeError(
+            f"{source_id}/{camera} failed with {encoder} worker {worker}: {detail}"
+        ) from error
     os.replace(temporary, destination)
     if not video_is_valid(destination, frame_count):
         raise RuntimeError(f"{source_id}/{camera}: video validation failed")
     return {
         "episode_index": episode_index,
         "camera": camera,
-        "gpu": gpu,
+        "worker": worker,
+        "encoder": encoder,
         "seconds": round(time.monotonic() - started, 3),
         "status": "written",
     }
@@ -488,14 +504,17 @@ def generate_metadata(
     source: Path,
     fps: float,
     task: str,
+    robot_type: str,
     gpus: list[int],
+    video_encoder: str,
+    video_workers: int,
     skipped: list[dict[str, str]],
 ) -> None:
     total_frames = sum(int(spec["frame_count"]) for spec in specs)
     total_episodes = len(specs)
     info = {
         "codebase_version": "v2.1",
-        "robot_type": "tianji_dual_arm_xhand",
+        "robot_type": robot_type,
         "total_episodes": total_episodes,
         "total_frames": total_frames,
         "total_tasks": 1,
@@ -551,7 +570,8 @@ def generate_metadata(
             "state_sampling": "linear interpolation",
             "action_sampling": "causal zero-order hold",
             "image_sampling": "constant-fps resample aligned to state start",
-            "video_encoder": "h264_nvenc",
+            "video_encoder": video_encoder,
+            "video_workers": video_workers,
             "gpus": gpus,
             "source_episode_ids": [str(spec["source_id"]) for spec in specs],
             "skipped_episodes": skipped,
@@ -709,14 +729,30 @@ def main() -> None:
     task = str(args.task).strip()
     if not task:
         raise RuntimeError("task must not be empty")
-    gpus = available_gpus(args.gpus)
+    if args.video_encoder == "h264_nvenc":
+        gpus = available_gpus(args.gpus)
+        video_worker_ids = gpus
+    else:
+        gpus = []
+        requested_workers = int(args.video_workers)
+        if requested_workers < 0:
+            raise RuntimeError("video workers must not be negative")
+        video_worker_count = requested_workers or min(8, os.cpu_count() or 1)
+        video_worker_ids = list(range(max(1, video_worker_count)))
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = output.parent / f".{output.name}.inprogress"
     staging.mkdir(parents=False, exist_ok=True)
     LOGGER.info("source=%s", source)
     LOGGER.info("staging=%s", staging)
     LOGGER.info("final=%s", output)
-    LOGGER.info("gpus=%s fps=%s task=%r", gpus, args.fps, task)
+    LOGGER.info(
+        "video_encoder=%s video_workers=%d gpus=%s fps=%s task=%r",
+        args.video_encoder,
+        len(video_worker_ids),
+        gpus,
+        args.fps,
+        task,
+    )
 
     dataset = RawDataset(source, args.runtime)
     specs, state_names, skipped = inspect_source(dataset, args.fps, args.skip_invalid)
@@ -743,31 +779,53 @@ def main() -> None:
                     result["status"],
                 )
 
-    gpu_queue: queue.Queue[int] = queue.Queue()
-    for gpu in gpus:
-        gpu_queue.put(gpu)
+    worker_queue: queue.Queue[int] = queue.Queue()
+    for worker in video_worker_ids:
+        worker_queue.put(worker)
     video_jobs = [(spec, camera) for spec in specs for camera in CAMERAS]
     with concurrent.futures.ThreadPoolExecutor(
-        max_workers=len(gpus), initializer=initialize_gpu_worker, initargs=(gpu_queue,)
+        max_workers=len(video_worker_ids),
+        initializer=initialize_video_worker,
+        initargs=(worker_queue,),
     ) as executor:
         futures = [
-            executor.submit(build_video, spec, camera, staging, args.fps, args.video_quality)
+            executor.submit(
+                build_video,
+                spec,
+                camera,
+                staging,
+                args.fps,
+                args.video_quality,
+                args.video_encoder,
+            )
             for spec, camera in video_jobs
         ]
         for completed, future in enumerate(concurrent.futures.as_completed(futures), 1):
             result = future.result()
             if completed % 10 == 0 or completed == len(futures):
                 LOGGER.info(
-                    "video %d/%d (episode=%06d camera=%s gpu=%s %s)",
+                    "video %d/%d (episode=%06d camera=%s worker=%s %s)",
                     completed,
                     len(futures),
                     result["episode_index"],
                     result["camera"],
-                    result.get("gpu", "resume"),
+                    result.get("worker", "resume"),
                     result["status"],
                 )
 
-    generate_metadata(staging, specs, state_names, source, args.fps, task, gpus, skipped)
+    generate_metadata(
+        staging,
+        specs,
+        state_names,
+        source,
+        args.fps,
+        task,
+        str(args.robot_type),
+        gpus,
+        args.video_encoder,
+        len(video_worker_ids),
+        skipped,
+    )
     LOGGER.info("calculating dataset statistics")
     calculate_stats(staging, specs)
     write_training_files(staging)

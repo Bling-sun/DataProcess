@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from dataprocess.conversion import Converter
 from dataprocess.raw_dataset import (
@@ -243,6 +244,52 @@ class RawDatasetTest(unittest.TestCase):
         self.assertEqual(metadata[0]["episode_index"], 0)
         self.assertEqual(metadata[0]["trim_start_s"], 0.1)
         self.assertEqual(metadata[1]["episode_index"], 1)
+
+    def test_direct_raw_conversion_ignores_review_filter_and_trim(self) -> None:
+        self.make_episode("episode_000000")
+        self.make_episode("episode_000001")
+        dataset = RawDataset(self.raw, self.runtime)
+        dataset.save_review(
+            "episode_000001",
+            {
+                "excluded": True,
+                "trim_start_s": 0.2,
+                "trim_end_s": 0.7,
+                "reason": "review rejected",
+            },
+        )
+        output = Path(self.temp.name) / "direct-output"
+        options = {
+            "output_root": str(output),
+            "task": "sort parcel",
+            "fps": 20,
+            "layout": "chunked",
+            "cameras": ["head"],
+            "direct_raw": True,
+        }
+
+        def fake_encode(*_args, **kwargs) -> None:
+            destination = kwargs["output"]
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(bytes(1024))
+
+        with mock.patch.object(Converter, "_encode_video", side_effect=fake_encode):
+            result = Converter(dataset).convert(options, lambda _value, _message: None)
+
+        self.assertEqual(result["episodes"], 2)
+        self.assertEqual(result["conversion_mode"], "raw")
+        with (output / "meta" / "episodes.jsonl").open(encoding="utf-8") as stream:
+            metadata = [json.loads(line) for line in stream]
+        self.assertEqual(
+            [item["raw_episode_id"] for item in metadata],
+            ["episode_000000", "episode_000001"],
+        )
+        self.assertTrue(all(item["trim_start_s"] == 0.0 for item in metadata))
+        self.assertTrue(all(item["trim_end_s"] == 0.95 for item in metadata))
+        conversion = json.loads((output / "meta" / "conversion.json").read_text())
+        self.assertEqual(conversion["conversion_mode"], "raw")
+        self.assertEqual(dataset.detail("episode_000000")["workflow_status"], "unprocessed")
+        self.assertEqual(dataset.detail("episode_000001")["workflow_status"], "failed")
 
 
 if __name__ == "__main__":

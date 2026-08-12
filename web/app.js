@@ -1009,13 +1009,21 @@ function drawChart() {
 }
 
 function updateExportSummary() {
-  const selected = app.episodes.filter((episode) => episode.ready && episode.processed && !episode.excluded);
-  const seconds = selected.reduce(
-    (sum, episode) => sum + Math.max(0, (episode.trim_end_s ?? episode.duration_s) - (episode.trim_start_s || 0)),
-    0,
-  );
+  const directRaw = $('input[name="exportMode"]:checked')?.value === "raw";
+  const selected = app.episodes.filter((episode) => (
+    episode.ready && (directRaw || (episode.processed && !episode.excluded))
+  ));
+  const seconds = directRaw
+    ? selected.reduce((sum, episode) => sum + Math.max(0, episode.duration_s || 0), 0)
+    : selected.reduce(
+      (sum, episode) => sum + Math.max(0, (episode.trim_end_s ?? episode.duration_s) - (episode.trim_start_s || 0)),
+      0,
+    );
   $("#exportEpisodes").textContent = selected.length;
   $("#exportSeconds").textContent = Math.round(seconds).toLocaleString();
+  $("#exportModeDescription").textContent = directRaw
+    ? "忽略人工失败标记、处理状态和裁剪区间，将所有结构校验通过的 episode 按完整时长直接转为 LeRobot v2.1。"
+    : "同步所有已保存审阅且未标记失败的 episode：未变更时跳过，新数据按原顺序追加，二次修改后替换旧版本。";
 }
 
 function openExportDialog() {
@@ -1033,10 +1041,11 @@ async function startExport() {
   const cameras = $$('input[name="camera"]:checked').map((node) => node.value);
   if (!task || !output) return toast("请填写输出目录和任务描述", "error");
   if (!cameras.length) return toast("请至少选择一个相机", "error");
+  const directRaw = $('input[name="exportMode"]:checked')?.value === "raw";
   const episodeIds = app.episodes
-    .filter((episode) => episode.ready && episode.processed && !episode.excluded)
+    .filter((episode) => episode.ready && (directRaw || (episode.processed && !episode.excluded)))
     .map((episode) => episode.id);
-  if (!episodeIds.length) return toast("没有可导出的 episode", "error");
+  if (!episodeIds.length) return toast(directRaw ? "没有可直接转换的原始 episode" : "没有可导出的 episode", "error");
   savePreferences(true);
   $("#startExport").disabled = true;
   $("#jobProgress").classList.remove("hidden");
@@ -1051,7 +1060,8 @@ async function startExport() {
         fps: Number($("#exportFps").value),
         layout: $("#exportLayout").value,
         cameras,
-        episode_ids: episodeIds,
+        ...(directRaw ? {} : { episode_ids: episodeIds }),
+        direct_raw: directRaw,
         overwrite: $("#overwriteOutput").checked,
       },
     });
@@ -1136,6 +1146,7 @@ function bindEvents() {
     seek(((event.clientX - rect.left) / rect.width) * app.detail.duration_s);
   });
   $("#openExport").addEventListener("click", openExportDialog);
+  $$('input[name="exportMode"]').forEach((input) => input.addEventListener("change", updateExportSummary));
   $("#startExport").addEventListener("click", startExport);
   window.addEventListener("resize", drawChart);
   window.addEventListener("beforeunload", () => {

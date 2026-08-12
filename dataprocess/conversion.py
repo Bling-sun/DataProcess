@@ -111,6 +111,11 @@ class Converter:
         if any(camera not in CAMERAS for camera in cameras):
             raise DataProcessError("相机配置非法")
 
+        direct_raw = options.get("direct_raw", False)
+        if not isinstance(direct_raw, bool):
+            raise DataProcessError("原始数据直转选项非法")
+        conversion_mode = "raw" if direct_raw else "reviewed"
+
         reviews = self.dataset.review_store.load(self.dataset.root)
         requested = options.get("episode_ids")
         episode_ids = requested if isinstance(requested, list) else self.dataset.episode_ids()
@@ -119,15 +124,15 @@ class Converter:
             inspection = self.dataset.inspect(str(episode_id))
             review = reviews.get(str(episode_id), {})
             processed = bool(review.get("processed", bool(review)))
-            exports = review.get("exports", [])
-            exported = isinstance(exports, list) and bool(exports)
             if (
                 inspection.ready
-                and processed
-                and not review.get("excluded", False)
+                and (direct_raw or (processed and not review.get("excluded", False)))
             ):
-                selected.append((str(episode_id), inspection, review))
+                # Raw mode deliberately ignores review exclusion and trimming.
+                selected.append((str(episode_id), inspection, {} if direct_raw else review))
         if not selected:
+            if direct_raw:
+                raise DataProcessError("没有结构校验通过、可直接转换的 episode")
             raise DataProcessError("没有已处理且未标记失败的 episode")
 
         existing_conversion: dict[str, Any] | None = None
@@ -141,6 +146,8 @@ class Converter:
                 managed_existing = (
                     existing_conversion.get("source") == str(self.dataset.root)
                     and existing_conversion.get("layout") == layout
+                    and existing_conversion.get("conversion_mode", "reviewed")
+                    == conversion_mode
                 )
             except (DataProcessError, OSError, json.JSONDecodeError):
                 managed_existing = False
@@ -165,7 +172,9 @@ class Converter:
             and not bool(options.get("overwrite", False))
         ):
             raise DataProcessError(f"输出目录已存在且不是当前数据集的历史输出: {output}")
-        dataset_signature = self._dataset_signature(selected, task, fps, layout, cameras)
+        dataset_signature = self._dataset_signature(
+            selected, task, fps, layout, cameras, conversion_mode
+        )
         if (
             managed_existing
             and existing_conversion is not None
@@ -179,6 +188,7 @@ class Converter:
                 "frames": int(existing_conversion.get("frame_count", 0)),
                 "videos": len(existing_episode_meta) * len(cameras),
                 "layout": layout,
+                "conversion_mode": conversion_mode,
                 "skipped_unchanged": True,
             }
 
@@ -318,6 +328,7 @@ class Converter:
                     "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                     "fps": fps,
                     "layout": layout,
+                    "conversion_mode": conversion_mode,
                     "episode_count": len(selected),
                     "frame_count": global_index,
                     "camera_names": cameras,
@@ -346,10 +357,11 @@ class Converter:
             if backup is not None and managed_existing and not bool(options.get("overwrite", False)):
                 shutil.rmtree(backup)
                 backup = None
-            self.dataset.mark_exported(
-                [(source_id, index) for index, (source_id, _, _) in enumerate(selected)],
-                output,
-            )
+            if not direct_raw:
+                self.dataset.mark_exported(
+                    [(source_id, index) for index, (source_id, _, _) in enumerate(selected)],
+                    output,
+                )
             progress(1.0, "转换完成")
             return {
                 "output_root": str(output),
@@ -358,6 +370,7 @@ class Converter:
                 "frames": global_index,
                 "videos": len(episode_meta) * len(cameras),
                 "layout": layout,
+                "conversion_mode": conversion_mode,
             }
         except Exception:
             if building.exists():
@@ -371,6 +384,7 @@ class Converter:
         fps: float,
         layout: str,
         cameras: list[str],
+        conversion_mode: str,
     ) -> str:
         episodes: list[dict[str, Any]] = []
         for source_id, inspection, review in selected:
@@ -401,6 +415,7 @@ class Converter:
             "task": task,
             "fps": fps,
             "layout": layout,
+            "conversion_mode": conversion_mode,
             "cameras": cameras,
             "episodes": episodes,
         }

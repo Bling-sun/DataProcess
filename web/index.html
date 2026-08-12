@@ -188,7 +188,12 @@
           <div><span class="panel-kicker">EXPORT DATASET</span><h2>导出 GR00T · LeRobot v2.1</h2></div>
           <button class="dialog-close" value="cancel" aria-label="关闭">×</button>
         </div>
-        <p class="dialog-intro">同步所有已保存审阅且未标记失败的 episode：未变更时跳过，新数据按原顺序追加，二次修改后替换旧版本。</p>
+        <p class="dialog-intro" id="exportModeDescription">同步所有已保存审阅且未标记失败的 episode：未变更时跳过，新数据按原顺序追加，二次修改后替换旧版本。</p>
+        <fieldset class="export-mode-options">
+          <legend>转换模式</legend>
+          <label><input type="radio" name="exportMode" value="reviewed" checked /><span><strong>审阅结果导出</strong><small>仅已处理且未失败，应用裁剪区间</small></span></label>
+          <label><input type="radio" name="exportMode" value="raw" /><span><strong>原始数据直转</strong><small>忽略审阅筛选和裁剪，转换全部可用原始数据</small></span></label>
+        </fieldset>
         <div class="form-grid">
           <label class="form-field form-field-wide"><span>输出目录</span><input id="outputRoot" value="/data/ExpressSorting_output/ExpressSorting_lerobot_v21/20260731_lerobot_v21" required /></label>
           <label class="form-field form-field-wide"><span>任务描述 / Language instruction</span><input id="taskText" list="taskHistory" value="Hold the shipping label face up with both hands and push it onto the conveyor belt." placeholder="可选择历史任务或输入新任务" required /><datalist id="taskHistory"></datalist></label>

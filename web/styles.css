@@ -222,6 +222,14 @@ dialog::backdrop { background: rgba(1, 6, 5, .78); backdrop-filter: blur(5px); }
 .dialog-header h2 { font-size: 18px; }
 .dialog-close { border: 0; color: var(--muted); background: transparent; cursor: pointer; font-size: 25px; line-height: 1; }
 .dialog-intro { margin: 15px 0 18px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.export-mode-options { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0 0 15px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.export-mode-options legend { padding: 0 5px; color: var(--muted); font-size: 9px; }
+.export-mode-options label { display: flex; align-items: flex-start; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 7px; color: #b8c8c3; cursor: pointer; }
+.export-mode-options label:has(input:checked) { border-color: var(--accent); background: rgba(101, 240, 181, .06); }
+.export-mode-options input { margin-top: 2px; }
+.export-mode-options span, .export-mode-options strong, .export-mode-options small { display: block; }
+.export-mode-options strong { color: var(--text); font-size: 10px; font-weight: 600; }
+.export-mode-options small { margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-field-wide { grid-column: 1 / -1; }
 .form-field input, .form-field select { width: 100%; padding: 10px; font-size: 11px; }
@@ -259,6 +267,7 @@ input[type="checkbox"] { accent-color: var(--mint-strong); }
   .note-field { grid-column: 1 / -1; padding: 13px 2px 0; }
 }
 @media (max-width: 760px) {
+  .export-mode-options { grid-template-columns: 1fr; }
   body { overflow: auto; }
   .app-shell { display: block; height: auto; }
   .topbar { position: sticky; top: 0; height: 64px; }
