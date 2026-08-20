@@ -19,6 +19,7 @@ const app = {
   activeJob: null,
   preloadGeneration: 0,
   preloadControllers: new Set(),
+  durationStats: null,
 };
 
 const cameraVideos = [
@@ -211,6 +212,7 @@ async function scan(refresh = false, selectCurrent = true) {
       : await api(`/api/episodes?${rootQuery()}`);
     app.episodes = payload.episodes;
     app.counts = payload.counts;
+    app.durationStats = null;
     saveEpisodeSnapshot();
     renderSummary();
     renderEpisodeList();
@@ -243,6 +245,30 @@ function renderSummary() {
   $("#countPending").textContent = app.counts.pending_export ?? 0;
   $("#countExported").textContent = app.counts.exported ?? 0;
   $("#countFailed").textContent = app.counts.failed ?? 0;
+  $("#averageDuration").textContent = app.durationStats
+    ? formatDuration(app.durationStats.average_duration_s)
+    : "计算";
+}
+
+async function calculateAverageDuration() {
+  const button = $("#calculateAverageDuration");
+  button.disabled = true;
+  $("#averageDuration").textContent = "…";
+  try {
+    app.durationStats = await api(`/api/dataset/duration-stats?${rootQuery()}`);
+    renderSummary();
+    toast(
+      `有效 ${app.durationStats.episode_count} 个 · 总时长 ${formatDuration(app.durationStats.total_duration_s)} · 平均 ${formatDuration(app.durationStats.average_duration_s)}`,
+      "normal",
+      5000,
+    );
+  } catch (error) {
+    app.durationStats = null;
+    renderSummary();
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function episodeMatches(episode) {
@@ -1105,6 +1131,7 @@ async function pollJob(jobId) {
 
 function bindEvents() {
   $("#scanButton").addEventListener("click", () => scan(true));
+  $("#calculateAverageDuration").addEventListener("click", calculateAverageDuration);
   $("#rawRoot").addEventListener("change", () => savePreferences());
   $("#outputRoot").addEventListener("change", () => savePreferences());
   $("#taskText").addEventListener("change", () => savePreferences());

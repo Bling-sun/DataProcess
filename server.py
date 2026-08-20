@@ -91,6 +91,10 @@ class Handler(BaseHTTPRequestHandler):
             refresh = query.get("refresh", ["0"])[0] == "1"
             self._json(self.application.dataset(raw_root).list_episodes(refresh=refresh))
             return
+        if parsed.path == "/api/dataset/duration-stats":
+            refresh = query.get("refresh", ["0"])[0] == "1"
+            self._json(self.application.dataset(raw_root).duration_stats(refresh=refresh))
+            return
         if parsed.path == "/api/jobs":
             self._json({"jobs": self.application.jobs.list()})
             return

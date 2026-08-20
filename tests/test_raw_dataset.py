@@ -105,6 +105,16 @@ class RawDatasetTest(unittest.TestCase):
             r"^[0-9a-f]+-[0-9a-f]+$",
         )
 
+    def test_duration_stats_only_include_ready_episodes(self) -> None:
+        self.make_episode("episode_000000", complete=True)
+        self.make_episode("episode_000001", complete=True)
+        self.make_episode("episode_000002", complete=False)
+        stats = RawDataset(self.raw, self.runtime).duration_stats()
+        self.assertEqual(stats["episode_count"], 2)
+        self.assertEqual(stats["skipped_episode_count"], 1)
+        self.assertAlmostEqual(stats["total_duration_s"], 1.9)
+        self.assertAlmostEqual(stats["average_duration_s"], 0.95)
+
     def test_review_excludes_without_touching_raw(self) -> None:
         episode = self.make_episode()
         dataset = RawDataset(self.raw, self.runtime)

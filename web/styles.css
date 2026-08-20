@@ -80,9 +80,13 @@ input:focus, select:focus { border-color: rgba(101,240,181,.48); box-shadow: 0 0
 .icon-button.loading svg { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.summary-grid { display: grid; grid-template-columns: repeat(5, 1fr); margin: 0 18px 18px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: rgba(255,255,255,.018); }
-.summary-grid div { display: flex; flex-direction: column; align-items: center; padding: 12px 5px 10px; border-right: 1px solid var(--line); }
-.summary-grid div:last-child { border-right: 0; }
+.summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0 18px 18px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: rgba(255,255,255,.018); }
+.summary-grid div, .summary-grid button { display: flex; flex-direction: column; align-items: center; padding: 12px 5px 10px; border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); color: inherit; background: transparent; }
+.summary-grid div:nth-child(3), .summary-grid button:nth-child(3n) { border-right: 0; }
+.summary-grid div:nth-last-child(-n+3), .summary-grid button:nth-last-child(-n+3) { border-bottom: 0; }
+.summary-grid button { cursor: pointer; transition: 150ms ease; }
+.summary-grid button:hover { color: var(--mint); background: var(--mint-soft); }
+.summary-grid button:disabled { cursor: wait; opacity: .65; }
 .summary-grid strong { font: 600 19px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .summary-grid span { margin-top: 7px; color: var(--muted); font-size: 10px; }
 .preload-status { display: flex; align-items: center; gap: 7px; min-height: 28px; margin: -8px 18px 13px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: rgba(255,255,255,.018); font-size: 9px; }

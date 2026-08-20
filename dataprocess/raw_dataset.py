@@ -521,6 +521,26 @@ class RawDataset:
         counts["exportable"] = counts["pending_export"]
         return {"raw_root": str(self.root), "counts": counts, "episodes": episodes}
 
+    def duration_stats(self, refresh: bool = False) -> dict[str, Any]:
+        """Calculate duration statistics for structurally valid raw episodes."""
+        episode_ids = self.episode_ids()
+        durations = [
+            inspection.duration_s
+            for episode_id in episode_ids
+            if (inspection := self.inspect(episode_id, refresh=refresh)).ready
+        ]
+        total_duration_s = sum(durations)
+        episode_count = len(durations)
+        return {
+            "raw_root": str(self.root),
+            "episode_count": episode_count,
+            "skipped_episode_count": len(episode_ids) - episode_count,
+            "total_duration_s": round(total_duration_s, 3),
+            "average_duration_s": round(total_duration_s / episode_count, 3)
+            if episode_count
+            else 0.0,
+        }
+
     def detail(self, episode_id: str) -> dict[str, Any]:
         inspection = self.inspect(episode_id)
         review = self.review_store.load(self.root).get(episode_id, {})

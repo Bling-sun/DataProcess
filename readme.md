@@ -144,6 +144,8 @@ RAW_ROOT/
 | 已导出 | 已成功同步到至少一个输出数据集 |
 | 失败 | 源数据检查失败，或被人工排除 |
 
+点击左侧“平均时长”可计算当前原始数据目录的时长统计。计算只纳入结构校验通过的 episode，并显示有效 episode 数、总时长和平均时长。也可直接调用 `GET /api/dataset/duration-stats?raw_root=/绝对路径` 获取 JSON 结果。
+
 ### 4.2 回放 episode
 
 点击左侧 episode 后，页面会同步显示：
